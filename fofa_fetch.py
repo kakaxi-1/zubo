@@ -4,7 +4,6 @@ import requests
 import time
 import concurrent.futures
 import subprocess
-import socket
 from datetime import datetime, timezone, timedelta
 
 # ===============================
@@ -336,165 +335,33 @@ def second_stage():
 
 
 # ===============================
-def check_stream_latency(url, timeout=8):
-    """快速检测网络延迟和连接性"""
-    try:
-        cmd = [
-            "ffprobe",
-            "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-timeout", "5000000",
-            url
-        ]
-        
-        start_time = time.time()
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout
-        )
-        end_time = time.time()
-        
-        response_time = end_time - start_time
-        
-        if response_time > 6:
-            return False
-        
-        return result.returncode == 0
-        
-    except Exception:
-        return False
-
-
-# ===============================
-def check_stream_smoothness(url, timeout=10):
-    """检测播放流畅度和稳定性"""
-    try:
-        cmd = [
-            "ffmpeg",
-            "-loglevel", "info",
-            "-stats",
-            "-i", url,
-            "-t", "8",
-            "-c", "copy",
-            "-f", "null",
-            "-max_error_rate", "0.5",
-            "-"
-        ]
-        
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-        
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-            return False
-        
-        output = stderr
-        
-        network_errors = [
-            'Connection timed out',
-            'Connection refused',
-            'Network is unreachable',
-            'HTTP error 4',
-            'HTTP error 5',
-            'Server returned 4',
-            'Server returned 5'
-        ]
-        
-        for error in network_errors:
-            if error in output:
-                return False
-        
-        if 'frame=' not in output:
-            return False
-        
-        import re
-        
-        frame_match = re.search(r'frame=\s*(\d+)', output)
-        if not frame_match:
-            return False
-        
-        total_frames = int(frame_match.group(1))
-        
-        if total_frames < 150:
-            return False
-        
-        speed_match = re.search(r'speed=\s*([\d.]+)x', output)
-        if speed_match:
-            speed = float(speed_match.group(1))
-            if speed < 0.8 or speed > 1.2:
-                return False
-        
-        drop_match = re.search(r'drop=\s*(\d+)', output)
-        if drop_match:
-            dropped_frames = int(drop_match.group(1))
-            if dropped_frames > total_frames * 0.1:
-                return False
-        
-        decode_errors = [
-            'error while decoding',
-            'corrupt',
-            'invalid data',
-            'concealing',
-            'missing picture'
-        ]
-        
-        error_count = 0
-        for error in decode_errors:
-            if error.lower() in output.lower():
-                error_count += 1
-        
-        if error_count >= 3:
-            return False
-        
-        fps_match = re.search(r'fps=\s*([\d.]+)', output)
-        if fps_match:
-            fps = float(fps_match.group(1))
-            if fps < 20 or fps > 30:
-                return False
-        
-        return True
-        
-    except Exception:
-        return False
-
-
-# ===============================
-def check_stream_comprehensive(url, timeout=12):
-    """综合检测"""
-    if not check_stream_latency(url, timeout=5):
-        return False
-    
-    if not check_stream_smoothness(url, timeout=8):
-        return False
-    
-    return True
-
-
-# ===============================
 # 第三阶段
 def third_stage():
-    print("🧩 第三阶段：多线程检测CCTV1播放质量生成 IPTV.txt 并写回可用 IP 到 ip/目录（覆盖）")
+    print("🧩 第三阶段：多线程检测代表频道生成 IPTV.txt 并写回可用 IP 到 ip/目录（覆盖）")
 
     if not os.path.exists(ZUBO_FILE):
         print("⚠️ zubo.txt 不存在，跳过第三阶段")
         return
 
+    def check_stream(url, timeout=5):
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_streams", "-i", url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout + 2
+            )
+            return b"codec_type" in result.stdout
+        except Exception:
+            return False
+
+    # 别名映射
     alias_map = {}
     for main_name, aliases in CHANNEL_MAPPING.items():
         for alias in aliases:
             alias_map[alias] = main_name
 
+    # 读取现有 ip 文件，建立 ip_port -> operator 映射
     ip_info = {}
     if os.path.exists(IP_DIR):
         for fname in os.listdir(IP_DIR):
@@ -510,6 +377,7 @@ def third_stage():
             except Exception as e:
                 print(f"⚠️ 读取 {fname} 失败：{e}")
 
+    # 读取 zubo.txt 并按 ip:port 分组
     groups = {}
     with open(ZUBO_FILE, encoding="utf-8") as f:
         for line in f:
@@ -526,70 +394,28 @@ def third_stage():
 
             groups.setdefault(ip_port, []).append((ch_main, url))
 
+    # 选择代表频道并检测
     def detect_ip(ip_port, entries):
-        cctv1_urls = [u for c, u in entries if c == "CCTV1"]
-        
-        if not cctv1_urls:
-            return ip_port, False
-        
-        url = cctv1_urls[0]
-        
-        if check_stream_comprehensive(url, timeout=12):
-            return ip_port, True
-        
-        return ip_port, False
+        rep_channels = [u for c, u in entries if c == "CCTV1"]
+        if not rep_channels and entries:
+            rep_channels = [entries[0][1]]
+        playable = any(check_stream(u) for u in rep_channels)
+        return ip_port, playable
 
-    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP，使用8个线程）...")
+    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP）...")
     playable_ips = set()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {}
-        for ip_port, chs in groups.items():
-            future = executor.submit(detect_ip, ip_port, chs)
-            futures[future] = ip_port
-        
-        completed = 0
-        success_count = 0
-        fail_count = 0
-        
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(detect_ip, ip, chs): ip for ip, chs in groups.items()}
         for future in concurrent.futures.as_completed(futures):
-            completed += 1
-            ip_port = futures[future]
             try:
-                ip_port_result, ok = future.result()
-                if ok:
-                    playable_ips.add(ip_port_result)
-                    success_count += 1
-                    print(f"✅ [{success_count}] 发现可用IP: {ip_port_result}")
-                else:
-                    fail_count += 1
-                
-                if completed % 20 == 0:
-                    print(f"📊 进度: {completed}/{len(groups)}，成功: {success_count}，失败: {fail_count}")
-                    
+                ip_port, ok = future.result()
             except Exception as e:
-                print(f"⚠️ 检测 {ip_port} 异常：{e}")
-                fail_count += 1
+                print(f"⚠️ 线程检测返回异常：{e}")
                 continue
+            if ok:
+                playable_ips.add(ip_port)
 
-    print(f"✅ 检测完成，可用 IP 共 {len(playable_ips)} 个")
-    
-    if playable_ips:
-        print("📋 可用IP列表:")
-        for ip in sorted(playable_ips)[:20]:  # 只显示前20个
-            operator = ip_info.get(ip, "未知")
-            print(f"  - {ip} ({operator})")
-        if len(playable_ips) > 20:
-            print(f"  ... 以及另外 {len(playable_ips) - 20} 个IP")
-    else:
-        print("⚠️ 未发现任何可用IP")
-        print("💡 可能原因：")
-        print("  1. 当前所有IP的CCTV1都不可用")
-        print("  2. 网络连接有问题")
-        print("  3. 检测标准过严，可以尝试：")
-        print("     - 增加超时时间")
-        print("     - 减少播放测试时间")
-        print("     - 放宽检测标准")
+    print(f"✅ 检测完成，可播放 IP 共 {len(playable_ips)} 个")
 
     valid_lines = []
     seen = set()
@@ -638,7 +464,6 @@ def third_stage():
     except Exception as e:
         print(f"❌ 写 IPTV.txt 失败：{e}")
 
-
 # ===============================
 # 文件推送
 def push_all_files():
@@ -653,11 +478,7 @@ def push_all_files():
     os.system("git add ip/*.txt || true")
     os.system("git add IPTV.txt || true")
     os.system('git commit -m "自动更新：计数、IP文件、IPTV.txt" || echo "⚠️ 无需提交"')
-    
-    # 先pull再push，避免冲突
-    os.system("git pull origin main --rebase || true")
     os.system("git push origin main || echo '⚠️ 推送失败'")
-
 
 # ===============================
 # 主执行逻辑
