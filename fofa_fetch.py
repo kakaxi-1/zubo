@@ -336,20 +336,60 @@ def second_stage():
 
 
 # ===============================
-def check_stream_30s(url, test_duration=30):
-    """
-    返回：是否通过
-    """
+def check_stream_enhanced(url, timeout=10):
+    """快速检查基本可连接性"""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate",
+            "-of", "csv=p=0",
+            "-timeout", "10000000",
+            url
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout
+        )
+        
+        output = result.stdout.decode('utf-8', errors='ignore').strip()
+        
+        if output:
+            import re
+            fps_match = re.search(r'(\d+)/(\d+)', output)
+            if fps_match:
+                num, den = int(fps_match.group(1)), int(fps_match.group(2))
+                fps = num / den if den > 0 else 0
+
+                if fps < 20:
+                    return False
+            
+            if 'x' in output or ',' in output:
+                return True
+            return len(output) > 0
+        
+        return False
+        
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return False
+
+
+def check_stream_quality(url, test_duration=5):
+    """5秒快速质量检测"""
     try:
         cmd = [
             "ffmpeg",
-            "-loglevel", "warning",
-            "-stats",
+            "-loglevel", "error",
             "-i", url,
             "-t", str(test_duration),
             "-c", "copy",
             "-f", "null",
-            "-max_muxing_queue_size", "1024",
             "-"
         ]
         
@@ -359,65 +399,39 @@ def check_stream_30s(url, test_duration=30):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            universal_newlines=True,
             bufsize=1
         )
         
-        timeout = test_duration + 5
-        
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            stdout, stderr = process.communicate(timeout=test_duration + 5)
         except subprocess.TimeoutExpired:
             process.kill()
-            stdout, stderr = process.communicate()
             return False
         
         elapsed_time = time.time() - start_time
-        output = stderr
         
-        import re
-        speed_match = re.search(r'speed=\s*([\d.]+)x', output)
-        frame_match = re.search(r'frame=\s*(\d+)', output)
+        if "error" in stderr.lower() or "Error" in stderr:
+            non_fatal_errors = [
+                "deprecated",
+                "warning",
+                "Estimating duration from bitrate"
+            ]
+            
+            for non_fatal in non_fatal_errors:
+                if non_fatal in stderr:
+                    break
+            else:
+                if "error" in stderr.lower():
+                    return False
         
-        error_patterns = [
-            r'error|Error|ERROR',
-            r'timeout|Timeout|TIMEOUT',
-            r'Connection refused',
-            r'HTTP error 4\d{2}',
-            r'HTTP error 5\d{2}',
-            r'Invalid data',
-            r'Unable to open',
-            r'no suitable codec',
-            r'bitstream filter',
-            r'corrupt',
-            r'missing picture',
-            r'Application provided invalid',
-            r'Server returned 4\d{2}',
-            r'Server returned 5\d{2}',
-        ]
-        
-        for pattern in error_patterns:
-            if re.search(pattern, output, re.IGNORECASE):
-                return False
-        
-        speed = float(speed_match.group(1)) if speed_match else 0
-        frames = int(frame_match.group(1)) if frame_match else 0
-        
-        expected_frames_min = test_duration * 25
-        
-        if speed < 0.8:
+        if elapsed_time < 1:
             return False
-        
-        if frames < expected_frames_min * 0.7:
-            return False
-        
-        if elapsed_time > test_duration * 1.5:
-            return False
-        
+            
         return True
             
     except Exception:
         return False
+
 
 # ===============================
 # 第三阶段
@@ -428,7 +442,8 @@ def third_stage():
         print("⚠️ zubo.txt 不存在，跳过第三阶段")
         return
 
-    def check_stream(url, timeout=5):
+    def quick_check_stream(url, timeout=5):
+        """快速检测，验证基本可连接性"""
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_streams", "-i", url],
@@ -481,16 +496,13 @@ def third_stage():
         if not rep_channels and entries:
             rep_channels = [entries[0][1]]
         
-        quick_passed = any(check_stream(u) for u in rep_channels)
-        if not quick_passed:
+        if not rep_channels:
             return ip_port, False
         
         for url in rep_channels:
-            try:
-                if check_stream_30s(url, test_duration=30):
+            if quick_check_stream(url, timeout=5):
+                if check_stream_quality(url, test_duration=5):
                     return ip_port, True
-            except Exception:
-                continue
         
         return ip_port, False
 
@@ -534,6 +546,7 @@ def third_stage():
         except Exception as e:
             print(f"❌ 写回 {target_file} 失败：{e}")
 
+    # 写 IPTV.txt（包含更新时间与分类）
     beijing_now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     disclaimer_url = "http://kakaxi.indevs.in/LOGO/Disclaimer.mp4"
 
