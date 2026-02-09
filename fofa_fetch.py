@@ -336,165 +336,165 @@ def second_stage():
 
 
 # ===============================
-# CCTV1全高清质量检测函数
-def check_cctv1_quality(url, timeout=15):
-    """专门检测CCTV1的质量，要求全高清1080p"""
+def check_stream_latency(url, timeout=8):
+    """快速检测网络延迟和连接性"""
     try:
-        # 获取流信息
-        probe_cmd = [
+        cmd = [
             "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0",  # 只检查视频流
-            "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,bit_rate",
-            "-show_entries", "format=bit_rate,duration",
-            "-of", "json",
+            "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-timeout", "5000000",
             url
         ]
         
-        probe_result = subprocess.run(
-            probe_cmd,
+        start_time = time.time()
+        result = subprocess.run(
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout
         )
+        end_time = time.time()
         
-        if probe_result.returncode != 0:
+        response_time = end_time - start_time
+        
+        if response_time > 6:
             return False
         
-        import json
-        try:
-            info = json.loads(probe_result.stdout.decode('utf-8', errors='ignore'))
-        except:
-            return False
+        return result.returncode == 0
         
-        # 检查是否有视频流
-        streams = info.get('streams', [])
-        if not streams:
-            return False
-        
-        video_streams = [s for s in streams if s.get('codec_type') == 'video']
-        if not video_streams:
-            return False
-        
-        video = video_streams[0]
-        
-        # 检查分辨率 - CCTV1必须是1080p全高清
-        width = video.get('width', 0)
-        height = video.get('height', 0)
-        
-        # 分辨率检查：必须是1920x1080（允许小范围偏差）
-        if width < 1800 or width > 2000:
-            return False
-        if height < 1000 or height > 1100:
-            return False
-        
-        # 检查码率
-        stream_bitrate = int(video.get('bit_rate', 0))
-        format_bitrate = int(info.get('format', {}).get('bit_rate', 0))
-        bitrate = stream_bitrate or format_bitrate
-        
-        # CCTV1全高清码率检查：5000-9000 kbps
-        if bitrate > 0:
-            bitrate_kbps = bitrate / 1000
-            # 严格范围：5000-9000 kbps
-            if bitrate_kbps < 5000 or bitrate_kbps > 9000:
-                return False
-        
-        # 检查帧率 - CCTV1应该是25fps（中国电视标准）
-        r_frame_rate = video.get('r_frame_rate', '0/0')
-        if '/' in r_frame_rate:
-            num, den = r_frame_rate.split('/')
-            try:
-                fps = float(num) / float(den) if float(den) > 0 else 0
-                # CCTV1应该是25fps，允许20-30fps范围
-                if fps < 20 or fps > 30:
-                    return False
-            except:
-                pass
-        
-        # 快速播放测试8秒，检查是否有严重错误
-        play_cmd = [
-            "ffmpeg",
-            "-loglevel", "error",  # 只显示错误
-            "-i", url,
-            "-t", "8",  # 测试8秒
-            "-c", "copy",
-            "-f", "null",
-            "-max_error_rate", "0.1",  # 允许很低的错误率
-            "-"
-        ]
-        
-        play_result = subprocess.run(
-            play_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=12  # 给8秒播放+额外时间
-        )
-        
-        stderr = play_result.stderr.decode('utf-8', errors='ignore').lower()
-        
-        # 检查关键错误（花屏、数据损坏等）
-        critical_errors = [
-            'corrupt',
-            'invalid data',
-            'error while decoding',
-            'concealing',
-            'error reading header',
-            'server returned 4',
-            'server returned 5',
-            'connection timed out',
-            'http error',
-            'bitstream not supported',
-            'no frame',
-            'missing picture'
-        ]
-        
-        for error in critical_errors:
-            if error in stderr:
-                return False
-        
-        # 检查是否完全没有播放
-        if 'frame=' not in stderr:
-            return False
-        
-        # 检查播放的帧数（8秒应该至少有160帧，按20fps最低算）
-        frame_match = re.search(r'frame=\s*(\d+)', stderr)
-        if frame_match:
-            frames = int(frame_match.group(1))
-            if frames < 160:  # 8秒至少160帧
-                return False
-        
-        # 检查播放速度（不能太慢）
-        speed_match = re.search(r'speed=\s*([\d.]+)x', stderr)
-        if speed_match:
-            speed = float(speed_match.group(1))
-            if speed < 0.8:  # 播放速度低于0.8倍，可能卡顿
-                return False
-        
-        return True
-        
-    except subprocess.TimeoutExpired:
-        return False
     except Exception:
         return False
 
 
 # ===============================
-# 第三阶段（严格检测CCTV1质量）
+def check_stream_smoothness(url, timeout=10):
+    """检测播放流畅度和稳定性"""
+    try:
+        cmd = [
+            "ffmpeg",
+            "-loglevel", "info",
+            "-stats",
+            "-i", url,
+            "-t", "8",
+            "-c", "copy",
+            "-f", "null",
+            "-max_error_rate", "0.5",
+            "-"
+        ]
+        
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            return False
+        
+        output = stderr
+        
+        network_errors = [
+            'Connection timed out',
+            'Connection refused',
+            'Network is unreachable',
+            'HTTP error 4',
+            'HTTP error 5',
+            'Server returned 4',
+            'Server returned 5'
+        ]
+        
+        for error in network_errors:
+            if error in output:
+                return False
+        
+        if 'frame=' not in output:
+            return False
+        
+        import re
+        
+        frame_match = re.search(r'frame=\s*(\d+)', output)
+        if not frame_match:
+            return False
+        
+        total_frames = int(frame_match.group(1))
+        
+        if total_frames < 150:
+            return False
+        
+        speed_match = re.search(r'speed=\s*([\d.]+)x', output)
+        if speed_match:
+            speed = float(speed_match.group(1))
+            if speed < 0.8 or speed > 1.2:
+                return False
+        
+        drop_match = re.search(r'drop=\s*(\d+)', output)
+        if drop_match:
+            dropped_frames = int(drop_match.group(1))
+            if dropped_frames > total_frames * 0.1:
+                return False
+        
+        decode_errors = [
+            'error while decoding',
+            'corrupt',
+            'invalid data',
+            'concealing',
+            'missing picture'
+        ]
+        
+        error_count = 0
+        for error in decode_errors:
+            if error.lower() in output.lower():
+                error_count += 1
+        
+        if error_count >= 3:
+            return False
+        
+        fps_match = re.search(r'fps=\s*([\d.]+)', output)
+        if fps_match:
+            fps = float(fps_match.group(1))
+            if fps < 20 or fps > 30:
+                return False
+        
+        return True
+        
+    except Exception:
+        return False
+
+
+# ===============================
+def check_stream_comprehensive(url, timeout=12):
+    """综合检测"""
+    if not check_stream_latency(url, timeout=5):
+        return False
+    
+    if not check_stream_smoothness(url, timeout=8):
+        return False
+    
+    return True
+
+
+# ===============================
+# 第三阶段
 def third_stage():
-    print("🧩 第三阶段：多线程检测CCTV1质量生成 IPTV.txt 并写回可用 IP 到 ip/目录（覆盖）")
+    print("🧩 第三阶段：多线程检测CCTV1播放质量生成 IPTV.txt 并写回可用 IP 到 ip/目录（覆盖）")
 
     if not os.path.exists(ZUBO_FILE):
         print("⚠️ zubo.txt 不存在，跳过第三阶段")
         return
 
-    # 别名映射
     alias_map = {}
     for main_name, aliases in CHANNEL_MAPPING.items():
         for alias in aliases:
             alias_map[alias] = main_name
 
-    # 读取现有 ip 文件，建立 ip_port -> operator 映射
     ip_info = {}
     if os.path.exists(IP_DIR):
         for fname in os.listdir(IP_DIR):
@@ -510,7 +510,6 @@ def third_stage():
             except Exception as e:
                 print(f"⚠️ 读取 {fname} 失败：{e}")
 
-    # 读取 zubo.txt 并按 ip:port 分组
     groups = {}
     with open(ZUBO_FILE, encoding="utf-8") as f:
         for line in f:
@@ -527,32 +526,32 @@ def third_stage():
 
             groups.setdefault(ip_port, []).append((ch_main, url))
 
-    # 选择CCTV1并检测
     def detect_ip(ip_port, entries):
-        # 只检测CCTV1
         cctv1_urls = [u for c, u in entries if c == "CCTV1"]
         
         if not cctv1_urls:
             return ip_port, False
         
-        # 检测CCTV1（最多检测前2个CCTV1源）
-        for url in cctv1_urls[:2]:
-            if check_cctv1_quality(url, timeout=15):
-                return ip_port, True
+        url = cctv1_urls[0]
+        
+        if check_stream_comprehensive(url, timeout=12):
+            return ip_port, True
         
         return ip_port, False
 
-    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP，使用6个线程）...")
+    print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP，使用8个线程）...")
     playable_ips = set()
     
-    # 使用较少的线程，因为每个检测需要较长时间
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = {}
         for ip_port, chs in groups.items():
             future = executor.submit(detect_ip, ip_port, chs)
             futures[future] = ip_port
         
         completed = 0
+        success_count = 0
+        fail_count = 0
+        
         for future in concurrent.futures.as_completed(futures):
             completed += 1
             ip_port = futures[future]
@@ -560,22 +559,37 @@ def third_stage():
                 ip_port_result, ok = future.result()
                 if ok:
                     playable_ips.add(ip_port_result)
+                    success_count += 1
+                    print(f"✅ [{success_count}] 发现可用IP: {ip_port_result}")
+                else:
+                    fail_count += 1
                 
-                # 显示进度
-                if completed % 10 == 0:
-                    print(f"📊 进度: {completed}/{len(groups)}，已发现 {len(playable_ips)} 个高质量IP")
+                if completed % 20 == 0:
+                    print(f"📊 进度: {completed}/{len(groups)}，成功: {success_count}，失败: {fail_count}")
                     
             except Exception as e:
                 print(f"⚠️ 检测 {ip_port} 异常：{e}")
+                fail_count += 1
                 continue
 
-    print(f"✅ 检测完成，高质量 CCTV1 IP 共 {len(playable_ips)} 个")
+    print(f"✅ 检测完成，可用 IP 共 {len(playable_ips)} 个")
     
     if playable_ips:
-        print("📋 高质量IP列表:")
-        for ip in sorted(playable_ips):
+        print("📋 可用IP列表:")
+        for ip in sorted(playable_ips)[:20]:  # 只显示前20个
             operator = ip_info.get(ip, "未知")
             print(f"  - {ip} ({operator})")
+        if len(playable_ips) > 20:
+            print(f"  ... 以及另外 {len(playable_ips) - 20} 个IP")
+    else:
+        print("⚠️ 未发现任何可用IP")
+        print("💡 可能原因：")
+        print("  1. 当前所有IP的CCTV1都不可用")
+        print("  2. 网络连接有问题")
+        print("  3. 检测标准过严，可以尝试：")
+        print("     - 增加超时时间")
+        print("     - 减少播放测试时间")
+        print("     - 放宽检测标准")
 
     valid_lines = []
     seen = set()
@@ -598,7 +612,7 @@ def third_stage():
             with open(target_file, "w", encoding="utf-8") as wf:
                 for ip_p in sorted(ip_set):
                     wf.write(ip_p + "\n")
-            print(f"📥 写回 {target_file}，共 {len(ip_set)} 个高质量地址")
+            print(f"📥 写回 {target_file}，共 {len(ip_set)} 个可用地址")
         except Exception as e:
             print(f"❌ 写回 {target_file} 失败：{e}")
 
@@ -620,7 +634,7 @@ def third_stage():
                         if name == ch:
                             f.write(line + "\n")
                 f.write("\n")
-        print(f"🎯 IPTV.txt 生成完成，共 {len(valid_lines)} 条频道（全部为高质量源）")
+        print(f"🎯 IPTV.txt 生成完成，共 {len(valid_lines)} 条频道")
     except Exception as e:
         print(f"❌ 写 IPTV.txt 失败：{e}")
 
