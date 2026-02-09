@@ -4,6 +4,7 @@ import requests
 import time
 import concurrent.futures
 import subprocess
+import socket
 from datetime import datetime, timezone, timedelta
 
 # ===============================
@@ -335,6 +336,90 @@ def second_stage():
 
 
 # ===============================
+def check_stream_30s(url, test_duration=30):
+    """
+    返回：是否通过
+    """
+    try:
+        cmd = [
+            "ffmpeg",
+            "-loglevel", "warning",
+            "-stats",
+            "-i", url,
+            "-t", str(test_duration),
+            "-c", "copy",
+            "-f", "null",
+            "-max_muxing_queue_size", "1024",
+            "-"
+        ]
+        
+        start_time = time.time()
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            universal_newlines=True,
+            bufsize=1
+        )
+        
+        timeout = test_duration + 5
+        
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            return False
+        
+        elapsed_time = time.time() - start_time
+        output = stderr
+        
+        import re
+        speed_match = re.search(r'speed=\s*([\d.]+)x', output)
+        frame_match = re.search(r'frame=\s*(\d+)', output)
+        
+        error_patterns = [
+            r'error|Error|ERROR',
+            r'timeout|Timeout|TIMEOUT',
+            r'Connection refused',
+            r'HTTP error 4\d{2}',
+            r'HTTP error 5\d{2}',
+            r'Invalid data',
+            r'Unable to open',
+            r'no suitable codec',
+            r'bitstream filter',
+            r'corrupt',
+            r'missing picture',
+            r'Application provided invalid',
+            r'Server returned 4\d{2}',
+            r'Server returned 5\d{2}',
+        ]
+        
+        for pattern in error_patterns:
+            if re.search(pattern, output, re.IGNORECASE):
+                return False
+        
+        speed = float(speed_match.group(1)) if speed_match else 0
+        frames = int(frame_match.group(1)) if frame_match else 0
+        
+        expected_frames_min = test_duration * 25
+        
+        if speed < 0.8:
+            return False
+        
+        if frames < expected_frames_min * 0.7:
+            return False
+        
+        if elapsed_time > test_duration * 1.5:
+            return False
+        
+        return True
+            
+    except Exception:
+        return False
+
+# ===============================
 # 第三阶段
 def third_stage():
     print("🧩 第三阶段：多线程检测代表频道生成 IPTV.txt 并写回可用 IP 到 ip/目录（覆盖）")
@@ -355,13 +440,11 @@ def third_stage():
         except Exception:
             return False
 
-    # 别名映射
     alias_map = {}
     for main_name, aliases in CHANNEL_MAPPING.items():
         for alias in aliases:
             alias_map[alias] = main_name
 
-    # 读取现有 ip 文件，建立 ip_port -> operator 映射
     ip_info = {}
     if os.path.exists(IP_DIR):
         for fname in os.listdir(IP_DIR):
@@ -377,7 +460,6 @@ def third_stage():
             except Exception as e:
                 print(f"⚠️ 读取 {fname} 失败：{e}")
 
-    # 读取 zubo.txt 并按 ip:port 分组
     groups = {}
     with open(ZUBO_FILE, encoding="utf-8") as f:
         for line in f:
@@ -394,13 +476,23 @@ def third_stage():
 
             groups.setdefault(ip_port, []).append((ch_main, url))
 
-    # 选择代表频道并检测
     def detect_ip(ip_port, entries):
         rep_channels = [u for c, u in entries if c == "CCTV1"]
         if not rep_channels and entries:
             rep_channels = [entries[0][1]]
-        playable = any(check_stream(u) for u in rep_channels)
-        return ip_port, playable
+        
+        quick_passed = any(check_stream(u) for u in rep_channels)
+        if not quick_passed:
+            return ip_port, False
+        
+        for url in rep_channels:
+            try:
+                if check_stream_30s(url, test_duration=30):
+                    return ip_port, True
+            except Exception:
+                continue
+        
+        return ip_port, False
 
     print(f"🚀 启动多线程检测（共 {len(groups)} 个 IP）...")
     playable_ips = set()
@@ -442,7 +534,6 @@ def third_stage():
         except Exception as e:
             print(f"❌ 写回 {target_file} 失败：{e}")
 
-    # 写 IPTV.txt（包含更新时间与分类）
     beijing_now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     disclaimer_url = "http://kakaxi.indevs.in/LOGO/Disclaimer.mp4"
 
@@ -463,6 +554,7 @@ def third_stage():
         print(f"🎯 IPTV.txt 生成完成，共 {len(valid_lines)} 条频道")
     except Exception as e:
         print(f"❌ 写 IPTV.txt 失败：{e}")
+
 
 # ===============================
 # 文件推送
