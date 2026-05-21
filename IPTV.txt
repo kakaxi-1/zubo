@@ -1,7 +1,7 @@
-更新时间: 2026-05-21 00:45:26（北京时间）
+更新时间: 2026-05-22 05:48:44（北京时间）
 
 更新时间,#genre#
-2026-05-21 00:45:26,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
+2026-05-22 05:48:44,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
 
 央视频道,#genre#
 CCTV1,http://58.62.234.243:10000/rtp/239.77.0.86:5146$广东电信
