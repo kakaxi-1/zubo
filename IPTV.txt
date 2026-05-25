@@ -1,7 +1,7 @@
-更新时间: 2026-05-25 00:17:34（北京时间）
+更新时间: 2026-05-25 18:45:32（北京时间）
 
 更新时间,#genre#
-2026-05-25 00:17:34,http://kakaxi.indevs.in/LOGO/Disclaimer.mp4
+2026-05-25 18:45:32,http://kakaxi.indevs.in/LOGO/Disclaimer.mp4
 
 央视频道,#genre#
 CCTV1,http://58.62.234.243:10000/rtp/239.77.0.86:5146$广东电信
