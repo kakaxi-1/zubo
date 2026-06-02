@@ -1,7 +1,7 @@
-更新时间: 2026-06-01 02:57:13（北京时间）
+更新时间: 2026-06-02 08:21:55（北京时间）
 
 更新时间,#genre#
-2026-06-01 02:57:13,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
+2026-06-02 08:21:55,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
 
 央视频道,#genre#
 
