@@ -1,7 +1,7 @@
-更新时间: 2026-07-30 12:26:54（北京时间）
+更新时间: 2026-07-31 09:10:43（北京时间）
 
 更新时间,#genre#
-2026-07-30 12:26:54,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
+2026-07-31 09:10:43,https://gitee.com/goldenwuhan/tv/raw/master/3D.mp4
 
 央视频道,#genre#
 CCTV1,http://43.138.5.183:10001/rtp/225.1.8.1:8008$北京市电信
